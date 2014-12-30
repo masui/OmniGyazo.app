@@ -1,0 +1,149 @@
+#!/usr/bin/env ruby
+# -*- coding: utf-8 -*-
+
+require 'net/http'
+
+# get id
+user = IO.popen("whoami", "r+").gets.chomp
+program = ARGV[0].to_s
+idfile = "/Users/#{user}/Library/Gyazo/id"
+old_idfile = File.dirname(program) + "/gyazo.app/Contents/Resources/id"
+
+id = ''
+if File.exist?(idfile) then
+  id = File.read(idfile).chomp
+elsif File.exist?(old_idfile) then
+  id = File.read(old_idfile).chomp
+end
+
+# capture png file
+tmpfile = "/tmp/image_upload#{$$}.png"
+imagefile = ARGV[1]
+
+if imagefile && File.exist?(imagefile) then
+  system "sips -s format png \"#{imagefile}\" --out \"#{tmpfile}\""
+else
+  system "screencapture -i \"#{tmpfile}\""
+  if File.exist?(tmpfile) then
+    system "sips -d profile --deleteColorManagementProperties \"#{tmpfile}\""  
+  end
+end
+
+if !File.exist?(tmpfile) then
+  exit
+end
+
+imagedata = File.read(tmpfile)
+File.delete(tmpfile)
+
+# upload
+boundary = '----BOUNDARYBOUNDARY----'
+
+HOST = 'gyazo.com'
+CGI = '/upload.cgi'
+UA   = 'Gyazo/1.0'
+
+data = <<EOF
+--#{boundary}\r
+content-disposition: form-data; name="id"\r
+\r
+#{id}\r
+--#{boundary}\r
+content-disposition: form-data; name="imagedata"; filename="gyazo.com"\r
+\r
+#{imagedata}\r
+--#{boundary}--\r
+EOF
+
+header ={
+  'Content-Length' => data.length.to_s,
+  'Content-type' => "multipart/form-data; boundary=#{boundary}",
+  'User-Agent' => UA
+}
+
+url = ''
+Net::HTTP.start(HOST,80){|http|
+  res = http.post(CGI,data,header)
+  url = res.response.to_ary[1]
+  system "echo -n #{url} | pbcopy"
+  # オリジナルのGyazo
+  # system "open #{url}"
+  # Cookieをセットしつつ画像をオープンする
+  # system "open 'http://gyazz.com/programs/upload.cgi?gyazoid=#{id}&url=#{url}'"
+  # 新しいGyazzではこうしたい
+  # system "open 'http://gyazz.sfc.keio.ac.jp/__gyazoupload/#{id}/#{url}'"
+  # 何故かトラブるので
+  system "open #{url}"
+
+  # save id
+  newid = res.response['X-Gyazo-Id']
+  if newid and newid != "" then
+    if !File.exist?(File.dirname(idfile)) then
+      Dir.mkdir(File.dirname(idfile))
+    end
+    if File.exist?(idfile) then
+      File.rename(idfile, idfile+Time.new.strftime("_%Y%m%d%H%M%S.bak"))
+    end
+    File.open(idfile,"w").print(newid)
+    if File.exist?(old_idfile) then
+      File.delete(old_idfile)
+    end
+  end
+}
+
+# ここからOmniGyazoの機能
+
+# OmniGraffleのファイルをセーブする
+system "osascript -e 'tell application \"OmniGraffle 5\" to save window 1'"
+
+# 最新のOmniGraffleファイルを捜す
+# ext = "graffle"
+# matched = `/usr/bin/mdfind #{ext}`
+# 
+#system "echo #{matched.split(/\n/).length} > /tmp/jjjj"
+#system "mdfind graffle | wc >> /tmp/jjjj"
+# 
+#t = Time.local('1970')
+#graffle = ''
+#len = ext.length
+#range = (-len-1..-1)
+#matched.split(/\n/).each { |file|
+#  modtime = File.mtime(file)
+#  system "echo #{modtime} #{file} >> /tmp/jjjj"
+#}
+#matched.split(/\n/).find_all { |file|
+#  file[range] == '.'+ext
+#}.each { |file|
+# modtime = File.mtime(file)
+#  # system "echo #{modtime} #{file} >> /tmp/jjjj"
+#  if t < modtime then
+#    t = modtime
+#    graffle = file
+#  end
+#}
+
+t = Time.local('1970')
+graffle = ''
+dir = "/Users/masui/Download2"
+Dir.open(dir).each { |file|
+  path = "#{dir}/#{file}"
+  if File.file?(path) then
+    if path =~ /\.graffle$/ then
+      modtime = File.mtime(path)
+      if t < modtime then
+        t = modtime
+        graffle = path
+      end
+    end
+  end
+}
+
+require 'digest/md5'
+
+hash = Digest::MD5.new.update(File.read(graffle)).to_s
+
+system "scp #{graffle} masui.sfc.keio.ac.jp:/Volumes/share/Web/upload/#{hash}.graffle"
+system "ssh masui.sfc.keio.ac.jp chmod 644 /Volumes/share/Web/upload/#{hash}.graffle"
+system "echo -n '[[http://masui.sfc.keio.ac.jp/#{hash}.graffle #{url}.png]]' | pbcopy"
+
+
